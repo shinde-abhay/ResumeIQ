@@ -21,6 +21,11 @@ uvicorn main:app --reload
 
 Open `docs/index.html` in your browser (it talks to `http://localhost:8000`). LibreOffice is only needed for the optional PDF export of .docx uploads.
 
+dashboard sample
+<img width="1909" height="930" alt="image" src="https://github.com/user-attachments/assets/4f28d10d-1650-4ad0-8f0f-7ba15679f6c8" />
+
+<img width="959" height="509" alt="image" src="https://github.com/user-attachments/assets/dc4f8c9f-a964-4fde-83e0-fd621355954f" />
+
 ## Notes
 
 - 5 MB upload limit. Text-based files only (no scanned images).
