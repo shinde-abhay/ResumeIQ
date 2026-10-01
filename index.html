@@ -65,6 +65,7 @@ ul{margin:0;padding-left:18px}li{margin:0 0 6px}
 </main>
 <script>
 const API = ["localhost","127.0.0.1",""].includes(location.hostname) ? "http://localhost:8000" : "https://resumeiq-njg9.onrender.com";
+fetch(API + "/").catch(() => {});
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 let file = null, data = null; const chosen = new Set();
