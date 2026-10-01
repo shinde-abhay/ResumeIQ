@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ResumeIQ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#F3F6F4;--card:#fff;--ink:#14201B;--mute:#5F6E67;--line:#DCE4DF;--acc:#0F766E;--acc-bg:#DDF1EE;--warn:#B4432B;--warn-bg:#FBE9E4}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 'Instrument Sans',system-ui,sans-serif}
+h1,h2{font-family:'Bricolage Grotesque',system-ui,sans-serif;margin:0}
+header{display:flex;align-items:baseline;gap:12px;padding:10px 20px;border-bottom:1px solid var(--line);background:var(--card)}
+header h1{font-size:20px}header span{color:var(--mute);font-size:13px}
+.grid{display:grid;grid-template-columns:340px 1fr;gap:16px;padding:16px 20px;max-width:1240px;margin:0 auto;align-items:start}
+.panel,.box{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+.panel{position:sticky;top:12px;display:flex;flex-direction:column;gap:10px}
+h2{font-size:15px;margin-bottom:8px}
+.dz{border:1.5px dashed #B7C5BD;border-radius:8px;padding:12px;text-align:center;cursor:pointer;color:var(--mute)}
+.dz:hover,.dz.on{border-color:var(--acc);background:var(--acc-bg)}
+.dz b{color:var(--ink);display:block;word-break:break-all}
+textarea,input[type=password]{width:100%;font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#FAFCFB;color:var(--ink)}
+textarea{height:210px;resize:vertical}
+textarea:focus,input:focus{outline:2px solid var(--acc);outline-offset:1px}
+details summary{cursor:pointer;color:var(--mute);font-size:13px}
+button{font:inherit;font-weight:600;border:0;border-radius:8px;padding:9px 14px;background:var(--acc);color:#fff;cursor:pointer}
+button:hover{filter:brightness(1.1)}button:disabled{opacity:.5;cursor:wait}
+button.alt{background:var(--ink)}
+.err{color:var(--warn);font-size:13px;min-height:0}
+.empty{color:var(--mute);padding:36px 12px;text-align:center}
+#out{display:grid;gap:12px}
+.score{display:flex;align-items:center;gap:14px}
+.score strong{font:700 30px 'Bricolage Grotesque',sans-serif;min-width:64px}
+.track{position:relative;flex:1;height:10px;background:#E4EBE7;border-radius:9px;overflow:hidden}
+.track i{position:absolute;left:0;top:0;bottom:0;border-radius:9px;transition:width .6s}
+.track .a{background:var(--acc)}.track .b{background:var(--ink)}
+.sub{color:var(--mute);font-size:13px;margin:6px 0 0}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px}
+.chip{padding:2px 9px;border-radius:99px;font-size:12.5px;background:var(--acc-bg);color:#0B4F4A;border:1px solid transparent}
+.chip.m{background:var(--warn-bg);color:var(--warn);cursor:pointer;user-select:none}
+.chip.m.sel{background:var(--warn);color:#fff}
+.cols{display:grid;grid-template-columns:1.5fr 1fr;gap:12px}
+.edit{display:flex;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);cursor:pointer}.edit:last-child{border:0}.edit s{color:var(--mute)}.edit input{margin-top:4px;accent-color:var(--acc)}
+ul{margin:0;padding-left:18px}li{margin:0 0 6px}
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.bar a{color:var(--acc);font-weight:600}
+@media(max-width:860px){.grid{grid-template-columns:1fr}.panel{position:static}.cols{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header><h1>ResumeIQ</h1><span>Analyze your resume once, apply all supported improvements, then verify the result</span></header>
+<main class="grid">
+  <aside class="panel">
+    <div class="dz" id="dz"><b id="fname">Choose or drop your resume</b><span id="fmeta">PDF or Word (.docx), up to 5 MB</span></div>
+    <input type="file" id="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+    <textarea id="jd" placeholder="Paste the job description"></textarea>
+    <details><summary>Groq API key (optional)</summary>
+      <input type="password" id="key" placeholder="gsk_..." autocomplete="off">
+      <p class="sub">Only sent with your requests. Not stored.</p></details>
+    <button id="go">Analyze resume</button>
+    <div class="err" id="err"></div>
+  </aside>
+  <section id="out"><div class="box empty">Upload a resume and paste a job description to see your match.</div></section>
+</main>
+<script>
+const API = ["localhost","127.0.0.1",""].includes(location.hostname) ? "http://localhost:8000" : "https://YOUR-BACKEND-URL";
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let file = null, data = null; const chosen = new Set();
+
+function setFile(f){
+  if(!f) return;
+  if(!/\.(pdf|docx)$/i.test(f.name)) return fail("Please choose a PDF or Word (.docx) file.");
+  if(f.size > 5*1024*1024) return fail("That file is over 5 MB.");
+  file = f; fail("");
+  $("fname").textContent = f.name; $("fmeta").textContent = (f.size/1048576).toFixed(2) + " MB";
+}
+function fail(m){ $("err").textContent = m; }
+$("dz").onclick = () => $("file").click();
+$("file").onchange = e => setFile(e.target.files[0]);
+["dragover","dragenter"].forEach(t => $("dz").addEventListener(t, e => {e.preventDefault(); $("dz").classList.add("on");}));
+["dragleave","drop"].forEach(t => $("dz").addEventListener(t, e => {e.preventDefault(); $("dz").classList.remove("on");}));
+$("dz").addEventListener("drop", e => setFile(e.dataTransfer.files[0]));
+
+async function call(path, extra){
+  const fd = new FormData(); fd.append("file", file); fd.append("jd", $("jd").value);
+  if(extra) Object.entries(extra).forEach(([k,v]) => fd.append(k,v));
+  const h = $("key").value.trim() ? {"X-Groq-Key": $("key").value.trim()} : {};
+  let r; try { r = await fetch(API + path, {method:"POST", body:fd, headers:h}); }
+  catch { throw new Error("Cannot reach the server. It may be starting up; try again in a minute."); }
+  const j = await r.json().catch(() => ({}));
+  if(!r.ok) throw new Error(j.detail || "Request failed (" + r.status + ").");
+  return j;
+}
+async function busy(btn, label, fn){
+  const t = btn.textContent; btn.disabled = true; btn.textContent = label; fail("");
+  try { await fn(); } catch(e){ fail(e.message); } finally { btn.disabled = false; btn.textContent = t; }
+}
+
+$("go").onclick = () => {
+  if(!file) return fail("Choose your resume first.");
+  if(!$("jd").value.trim()) return fail("Paste the job description.");
+  busy($("go"), "Analyzing…", async () => { data = await call("/api/analyze"); chosen.clear(); render(); });
+};
+
+function render(after){
+  const d = data, total = d.matched.length + d.missing.length;
+  $("out").innerHTML = `
+  <div class="box">
+    <div class="score"><strong>${after ? after.score_after : d.score}%</strong>
+      <div class="track">${after ? `<i class="a" style="width:${after.score_after}%"></i><i class="b" style="width:${after.score_before}%"></i>` : `<i class="a" style="width:${d.score}%"></i>`}</div></div>
+    <p class="sub">${after ? `Keyword match: ${after.score_before}% before, ${after.score_after}% after rewrite.` : `${d.matched.length} of ${total} job keywords found in your resume.`}</p>
+  </div>
+  <div class="box">
+    <h2>Keywords found</h2>
+    <div class="chips">${d.matched.map(k => `<span class="chip">${esc(k)}</span>`).join("") || '<span class="sub">None yet.</span>'}</div>
+    <h2>Missing${d.missing.length ? " — tap the ones you genuinely have" : ""}</h2>
+    <div class="chips" id="miss">${d.missing.map(k => `<span class="chip m${chosen.has(k) ? " sel" : ""}" data-k="${esc(k)}">${esc(k)}</span>`).join("") || '<span class="sub">Nothing missing.</span>'}</div>
+  </div>
+  <div class="cols">
+    <div class="box"><h2>Required line changes</h2><div id="edits">${d.improvements.map((e,i) => `<label class="edit"><input type="checkbox" data-i="${i}" checked><div><s>${esc(e.original)}</s><br>${esc(e.suggested)}${e.reason ? `<br><span class="sub">${esc(e.reason)}</span>` : ""}</div></label>`).join("") || '<p class="sub">No line changes needed.</p>'}</div></div>
+    <div class="box"><h2>Interview questions</h2><ul>${d.questions.map(q => `<li>${esc(q)}</li>`).join("") || '<li class="sub">No questions returned. Try analyzing again.</li>'}</ul></div>
+  </div>
+  <div class="box bar" id="bar">
+    <button class="alt" id="imp">Apply all recommended changes</button>
+    <span class="sub" style="margin:0">All recommended changes are applied in one pass. Changes are only made where your existing experience supports them.</span>
+    <span id="dl" class="bar"></span>
+  </div>`;
+  $("miss").onclick = e => { const k = e.target.dataset.k; if(!k) return; chosen.has(k) ? chosen.delete(k) : chosen.add(k); e.target.classList.toggle("sel"); };
+  $("imp").onclick = () => busy($("imp"), "Applying… (about 30 seconds)", async () => {
+    const edits = [...document.querySelectorAll("#edits input:checked")].map(x => ({original: data.improvements[+x.dataset.i].original, suggested: data.improvements[+x.dataset.i].suggested}));
+    const r = await call("/api/improve", {edits: JSON.stringify(edits), extra_skills: JSON.stringify([...chosen])});
+    render(r);
+    const save = (b64, name, mime, label) => {
+      const u = URL.createObjectURL(new Blob([Uint8Array.from(atob(b64), c => c.charCodeAt(0))], {type: mime}));
+      return `<a href="${u}" download="${esc(name)}">${label}</a>`;
+    };
+    const stem = file.name.replace(/\.(pdf|docx)$/i, "");
+    $("dl").innerHTML = [r.pdf && save(r.pdf, stem + ".pdf", "application/pdf", "Download PDF"),
+      r.docx && save(r.docx, stem + ".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "Download Word")].filter(Boolean).join(" ");
+    const note = t => $("dl").insertAdjacentHTML("afterend", `<span class="sub" style="margin:0;flex-basis:100%">${t}</span>`);
+    note(`${r.applied} line${r.applied === 1 ? "" : "s"} replaced.` + (r.skills_added === false ? " Couldn't find a skills line to add your skills to." : ""));
+    if(r.skipped.length) note("Couldn't locate these lines in the converted file, so they were left unchanged: " + r.skipped.map(esc).join(" | "));
+    if(r.missing_after.length) $("dl").insertAdjacentHTML("afterend", `<span class="sub" style="margin:0;flex-basis:100%">Still not in the resume: ${r.missing_after.map(esc).join(", ")}. These could not be safely added from the evidence already present in your resume.</span>`);
+  });
+}
+</script>
+</body>
+</html>
