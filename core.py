@@ -126,20 +126,14 @@ def analyze(data: bytes, jd: str, key: str | None) -> dict:
         "You are a senior technical recruiter. Reply with JSON only.",
         f"Keywords missing from the resume: {missing}\n\n"
         'Return {"improvements": [{"original","suggested","reason"}], "questions": [...]}.\n'
-        "- improvements: identify ALL meaningful single-line replacements needed in this resume for this job. "
-        "Do not stop at 6. `original` must be ONE existing bullet or line copied exactly from the resume. "
-        "`suggested` may reword only that line to naturally use a missing keyword or the job's wording, and only "
-        "if the existing line already demonstrates that skill. Never invent tools, experience, responsibilities, "
-        "certifications, metrics or numbers. Do not make cosmetic rewrites. Do not suggest a change merely because "
-        "different wording sounds better. Keep each suggested line close to the original length and formatting. "
-        "Every missing keyword that can be honestly supported by an existing resume line should be addressed in this "
-        "single response. If a missing keyword cannot be supported by the resume, do not force it into a line. "
-        "If no honest improvement is possible, return an empty list.\n"
-        "- Before returning improvements, check the entire resume against ALL missing keywords and do not leave an "
-        "obvious supported keyword for a later analysis.\n"
+        "- improvements: up to 6 single-line replacements. `original` must be ONE existing bullet or line copied "
+        "exactly from the resume. `suggested` rewords only that line to use a missing keyword or the job's "
+        "wording, and only if the line already shows that skill. Never invent tools, experience or numbers. "
+        "Keep `suggested` within 20% of the original length. `reason` is a few words. "
+        "If nothing can be honestly improved, return an empty list.\n"
         "- questions: exactly 5 interview questions tailored to this job description and this candidate's projects.\n\n"
         f"RESUME:\n{text[:6000]}\n\nJOB DESCRIPTION:\n{jd[:3000]}",
-        4000,
+        1800,
     )
     tn = _norm(text)
     edits = []
@@ -210,7 +204,8 @@ def _geom(b):
         lead=lead.group().strip() if lead else "", label=label)
 
 
-def _write(page, g, new):
+def _fit(page, g, new):
+    """Lay out `new` in the old paragraph's box. Returns None if it can't fit without overflowing."""
     reg, bold = g["fonts"]
     new = _latin(GLYPH.sub("", new.strip()))
     if g["lead"]:
@@ -220,7 +215,7 @@ def _write(page, g, new):
     if not label or not new.startswith(label):
         toks = [(w, False) for w, _ in toks]
     limit = min(g["rect"].x1 - g["x0"] + 12, page.rect.width - 36 - g["x0"])
-    for scale in (1.0, 0.95, 0.9, 0.85):               # shrink slightly before adding a line
+    for scale in (1.0, 0.95, 0.9):                     # keep close to the original size
         size = g["size"] * scale
         L = lambda t, b=False: fitz.get_text_length(t, fontname=bold if b else reg, fontsize=size)
         lines, cur = [[]], 0.0
@@ -229,10 +224,17 @@ def _write(page, g, new):
             if lines[-1] and cur + sp + L(w, b) > limit:
                 lines.append([]); cur, sp = 0.0, 0
             lines[-1].append((w, b)); cur += sp + L(w, b)
-        if len(lines) <= g["n"]:
-            break
+        if len(lines) <= g["n"]:                       # never add a line: it could overlap the next one
+            return {"lines": lines, "size": size}
+    return None
+
+
+def _draw(page, g, f):
+    reg, bold = g["fonts"]
+    size = f["size"]
+    L = lambda t, b=False: fitz.get_text_length(t, fontname=bold if b else reg, fontsize=size)
     pitch = g["pitch"] or size * 1.2
-    for k, line in enumerate(lines):
+    for k, line in enumerate(f["lines"]):
         segs = []
         for w, b in line:
             if segs and segs[-1][1] == b:
@@ -243,6 +245,41 @@ def _write(page, g, new):
         for text, b in segs:
             page.insert_text((x, y), text, fontname=bold if b else reg, fontsize=size, color=g["color"])
             x += L(text, b) + L(" ")
+
+
+def _paragraphs(page):
+    """Group text lines into paragraphs. Wrapped lines can sit in separate blocks, so join them by geometry."""
+    lines = []
+    for b in page.get_text("dict")["blocks"]:
+        if b["type"] == 0:
+            lines += [[s for s in l["spans"] if s["text"].strip()] for l in b["lines"]]
+    lines = [l for l in lines if l]
+    if not lines:
+        return []
+    left = min(l[0]["bbox"][0] for l in lines)
+    right = max(l[-1]["bbox"][2] for l in lines)
+    paras, pending = [], False
+    for sp in lines:
+        bullet = sp[0]["text"].strip() in BULLETS
+        text_sp = sp[1:] if bullet else sp
+        if not text_sp:                                # a bullet glyph on its own line: next line starts an item
+            pending = True
+            continue
+        label = bool(text_sp[0]["flags"] & 16 and text_sp[0]["text"].strip().endswith(":"))
+        cont = False
+        if paras and not (bullet or pending or label):
+            prev, pl = paras[-1], paras[-1]["lines"][-1]
+            dy = text_sp[0]["origin"][1] - pl[0]["origin"][1]
+            cont = (0 < dy <= 1.7 * text_sp[0]["size"]
+                    and abs(text_sp[0]["size"] - pl[-1]["size"]) <= 0.8
+                    and abs(text_sp[0]["bbox"][0] - prev["x0"]) <= 3
+                    and pl[-1]["bbox"][2] >= right - 0.18 * (right - left))   # previous line ran to the margin
+        if cont:
+            paras[-1]["lines"].append(text_sp)
+        else:
+            paras.append({"lines": [text_sp], "x0": text_sp[0]["bbox"][0]})
+        pending = False
+    return [{"lines": [{"spans": l} for l in p["lines"]]} for p in paras]
 
 
 def _append_to_line(page, blocks_on_page, skip_ids, matched, words):
@@ -272,24 +309,28 @@ def _edit_pdf(data, edits, new_skills, matched):
     doc = fitz.open(stream=data, filetype="pdf")
     blocks, texts = [], []
     for pno, page in enumerate(doc):
-        for b in page.get_text("dict")["blocks"]:
-            if b["type"] != 0:
-                continue
-            t = " ".join("".join(s["text"] for s in l["spans"]) for l in b["lines"]).strip()
-            if len(t) >= 10 and _geom(b):
-                blocks.append((pno, b)); texts.append(t)
+        for p in _paragraphs(page):
+            t = " ".join("".join(s["text"] for s in l["spans"]) for l in p["lines"]).strip()
+            if len(t) >= 10 and _geom(p):
+                blocks.append((pno, p)); texts.append(t)
 
     plan, skipped = _match_edits(edits, texts)
-    by_page = {}
+    by_page, done = {}, 0
     for i, new in plan.items():
-        by_page.setdefault(blocks[i][0], []).append((_geom(blocks[i][1]), new))
+        pno, p = blocks[i]
+        g = _geom(p)
+        f = _fit(doc[pno], g, new)
+        if f is None:                                  # won't fit without overlapping: leave this line alone
+            skipped.append(texts[i])
+        else:
+            by_page.setdefault(pno, []).append((g, f)); done += 1
     for pno, items in by_page.items():
         page = doc[pno]
         for g, _ in items:
             page.add_redact_annot(g["rect"] + (-1, 0, 1, 0), fill=(1, 1, 1))
         page.apply_redactions(images=0)                # never touch images
-        for g, new in items:
-            _write(page, g, new)
+        for g, f in items:
+            _draw(page, g, f)
 
     skills_ok = None
     if new_skills:
@@ -301,7 +342,7 @@ def _edit_pdf(data, edits, new_skills, matched):
                 break
     out = doc.tobytes(garbage=3, deflate=True)
     doc.close()
-    return out, len(plan), skipped, skills_ok
+    return out, done, skipped, skills_ok
 
 
 # ── DOCX: edit paragraphs directly ──────────────────────────────
